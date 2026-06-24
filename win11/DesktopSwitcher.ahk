@@ -78,8 +78,8 @@ SetDesktopName(num, name) {
     DllCall(SetDesktopNameProc, "Int", num - 1, "Ptr", name_utf8, "Int")
 }
 
-; 设定桌面最大数量限制
-global MaxDesktops := 9
+; ----- 此处删除了硬编码的桌面数量限制 "global MaxDesktops := 9" -----
+; 现在切换只依赖实际桌面数量，不再受上限约束。
 
 ; --- 动画相关全局变量 ---
 global FadeOpacity := 0       ; HUD 当前透明度
@@ -207,7 +207,8 @@ IsHoveringTriggerArea() {
 }
 
 SwitchTo(targetIndex) {
-    if (targetIndex > GetDesktopCount() || targetIndex > MaxDesktops || targetIndex < 1)
+    ; 只检查是否超出实际桌面数量或小于1，不再有硬编码上限
+    if (targetIndex > GetDesktopCount() || targetIndex < 1)
         return
     
     current := GetCurrentDesktopNum()
