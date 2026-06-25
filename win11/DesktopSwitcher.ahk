@@ -4,7 +4,7 @@ SendMode("Input")
 SetWorkingDir(A_ScriptDir)
 
 ; ======================================================================
-; 0. 权限提升（解决 Hyper-V、任务管理器等高权限窗口下热键失效的问题）
+; 0. 权限提升
 ; ======================================================================
 if not (A_IsAdmin || RegExMatch(DllCall("GetCommandLine", "str"), " /restart(?!\S)")) {
     try {
@@ -17,7 +17,7 @@ if not (A_IsAdmin || RegExMatch(DllCall("GetCommandLine", "str"), " /restart(?!\
 }
 
 ; ======================================================================
-; 1. 底层 DLL 加载与指针映射 (完全对齐官方示例)
+; 1. 底层 DLL 加载与指针映射
 ; ======================================================================
 global DllPath := A_ScriptDir "\VirtualDesktopAccessor.dll"
 global hVDA := DllCall("LoadLibrary", "Str", DllPath, "Ptr")
@@ -39,7 +39,7 @@ global RemoveDesktopProc               := DllCall("GetProcAddress", "Ptr", hVDA,
 global RegisterPostMessageHookProc     := DllCall("GetProcAddress", "Ptr", hVDA, "AStr", "RegisterPostMessageHook", "Ptr")
 
 ; ======================================================================
-; 2. 规范的 AHK v2 全局强类型接口函数封装 (1基索引转换 - 完全保留原样)
+; 2. 接口函数封装 (1基索引)
 ; ======================================================================
 GetDesktopCount() {
     return DllCall(GetDesktopCountProc, "Int")
@@ -78,38 +78,39 @@ SetDesktopName(num, name) {
     DllCall(SetDesktopNameProc, "Int", num - 1, "Ptr", name_utf8, "Int")
 }
 
-; ----- 此处删除了硬编码的桌面数量限制 "global MaxDesktops := 9" -----
-; 现在切换只依赖实际桌面数量，不再受上限约束。
+; ======================================================================
+; 2.5 桌面历史记录
+; ======================================================================
+global gCurrentDesktop := GetCurrentDesktopNum()
+global gPreviousDesktop := gCurrentDesktop
 
 ; --- 动画相关全局变量 ---
-global FadeOpacity := 0       ; HUD 当前透明度
-global FadeTarget := 230      ; HUD 目标最大透明度
+global FadeOpacity := 0
+global FadeTarget := 230
 
 ; ======================================================================
-; 3. UI 界面初始化：系统托盘与屏幕中央 HUD
+; 3. UI 界面初始化
 ; ======================================================================
 A_TrayMenu.Delete() 
 A_TrayMenu.Add("退出 Desktop Switcher", (*) => ExitApp()) 
 A_IconTip := "Desktop Switcher (Loading...)" 
 
-; 适配 16 字长，将窗口宽度从 400 微调回极简贴合的 360 像素
 global HUD := Gui("+AlwaysOnTop -Caption +ToolWindow +E0x20 -DPIScale") 
 HUD.BackColor := "252525" 
 
 HUD.SetFont("s18 w500 cWhite", "Microsoft YaHei") 
 global HUDText := HUD.Add("Text", "x0 y0 w360 h64 0x201 BackgroundTrans", "Desktop") 
 
-; 初始化为完全透明
 WinSetTransparent(0, HUD.Hwnd) 
 
-UpdateUI(0)
+UpdateUI(gCurrentDesktop)
 
 ; ======================================================================
-; 4. 热键绑定 (作用域限定：任务栏 或 屏幕上方 10%)
+; 4. 热键绑定 (任务栏 或 屏幕上方 10%)
 ; ======================================================================
 #HotIf IsHoveringTriggerArea()
 
-    ; --- [基础跳转] 切换到指定桌面 (Ctrl + 1~9) ---
+    ; --- 基础跳转 Ctrl+1~9 ---
     ^1::SwitchTo(1)
     ^2::SwitchTo(2)
     ^3::SwitchTo(3)
@@ -120,34 +121,75 @@ UpdateUI(0)
     ^8::SwitchTo(8)
     ^9::SwitchTo(9)
 
-    ; --- [相对跳转] 限边界切换上/下桌面 (无修饰键免 Alt 纯滚轮触发) ---
+    ; --- 相对跳转 ---
     ^Tab::SwitchNext()
     ^+Tab::SwitchPrev()
-    WheelUp::SwitchPrev()      
-    WheelDown::SwitchNext()    
+    WheelUp::SwitchPrev()
+    WheelDown::SwitchNext()
 
-    ; --- [生命周期] 创建新桌面 (Ctrl + N) ---
-    ^n:: {
-        oldIdx := GetCurrentDesktopNum()
-        CreateDesktop() 
-        
+    ; --- 快速往返 Alt+Tab ---
+    !Tab::SwitchToPreviousDesktop()
+
+    ; --- ★ 首字母跳转 Ctrl+A~Z ★ ---
+    ^a::SwitchToByLetter("a")
+    ^b::SwitchToByLetter("b")
+    ^c::SwitchToByLetter("c")
+    ^d::SwitchToByLetter("d")
+    ^e::SwitchToByLetter("e")
+    ^f::SwitchToByLetter("f")
+    ^g::SwitchToByLetter("g")
+    ^h::SwitchToByLetter("h")
+    ^i::SwitchToByLetter("i")
+    ^j::SwitchToByLetter("j")
+    ^k::SwitchToByLetter("k")
+    ^l::SwitchToByLetter("l")
+    ^m::SwitchToByLetter("m")
+    ^n::SwitchToByLetter("n")   ; Ctrl+N 现在正常首字母跳转
+    ^o::SwitchToByLetter("o")
+    ^p::SwitchToByLetter("p")
+    ^q::SwitchToByLetter("q")
+    ^r::SwitchToByLetter("r")
+    ^s::SwitchToByLetter("s")
+    ^t::SwitchToByLetter("t")
+    ^u::SwitchToByLetter("u")
+    ^v::SwitchToByLetter("v")
+    ^w::SwitchToByLetter("w")
+    ^x::SwitchToByLetter("x")
+    ^y::SwitchToByLetter("y")
+    ^z::SwitchToByLetter("z")
+
+    ; --- ★ 修改：创建桌面改为 Ctrl+Shift+N，并直接跳转到新桌面 ★ ---
+    ^+n:: {
+        global gCurrentDesktop, gPreviousDesktop
+        totalBefore := GetDesktopCount()
+        CreateDesktop()
+
+        ; 等待新桌面出现（数量增加）
         loop 50 {
-            if (GetCurrentDesktopNum() != oldIdx)
+            if (GetDesktopCount() > totalBefore)
                 break
             Sleep(10)
         }
-        UpdateUI(GetCurrentDesktopNum())
+
+        ; 新桌面一定是最后一个索引
+        newIdx := GetDesktopCount()
+
+        ; 如果确实创建成功且数量变化了
+        if (newIdx > totalBefore) {
+            gPreviousDesktop := gCurrentDesktop
+            gCurrentDesktop := newIdx
+            GoToDesktopNum(newIdx)
+            UpdateUI(newIdx)
+        }
     }
 
-    ; --- [生命周期] 删除当前桌面 (Ctrl + Delete) ---
+    ; --- 删除当前桌面 Ctrl+Delete ---
     ^Delete:: {
         total := GetDesktopCount()
         if (total > 1) { 
-            oldIdx := GetCurrentDesktopNum()
+            oldIdx := gCurrentDesktop
             fallbackIdx := (oldIdx == 1) ? 1 : (oldIdx - 1)
-            
             RemoveDesktop(oldIdx, fallbackIdx) 
-            
             loop 50 {
                 if (GetCurrentDesktopNum() != oldIdx)
                     break
@@ -157,13 +199,11 @@ UpdateUI(0)
         }
     }
 
-    ; --- [状态修改] 重命名当前桌面 (F2) ---
+    ; --- 重命名 F2 ---
     F2:: {
-        currentIdx := GetCurrentDesktopNum()
+        currentIdx := gCurrentDesktop
         currentName := GetDesktopName(currentIdx)
-        
         IB := InputBox("请输入新的桌面名称：", "重命名当前桌面", "w300", currentName)
-        
         if (IB.Result = "OK") {
             SetDesktopName(currentIdx, IB.Value)
             UpdateUI(currentIdx) 
@@ -173,7 +213,7 @@ UpdateUI(0)
 #HotIf
 
 ; ======================================================================
-; 5. 核心业务与 UI 渲染函数实现
+; 5. 核心业务与 UI 渲染函数
 ; ======================================================================
 
 IsHoveringTriggerArea() {
@@ -185,12 +225,10 @@ IsHoveringTriggerArea() {
                 return true
         }
     }
-
     oldCoordMode := A_CoordModeMouse
     CoordMode("Mouse", "Screen") 
     MouseGetPos(&mouseX, &mouseY)
     CoordMode("Mouse", oldCoordMode) 
-
     loop MonitorGetCount() {
         try {
             MonitorGet(A_Index, &Left, &Top, &Right, &Bottom)
@@ -207,13 +245,13 @@ IsHoveringTriggerArea() {
 }
 
 SwitchTo(targetIndex) {
-    ; 只检查是否超出实际桌面数量或小于1，不再有硬编码上限
+    global gCurrentDesktop, gPreviousDesktop
     if (targetIndex > GetDesktopCount() || targetIndex < 1)
         return
-    
-    current := GetCurrentDesktopNum()
-    if (current == targetIndex)
+    if (gCurrentDesktop == targetIndex)
         return
+
+    gPreviousDesktop := gCurrentDesktop
 
     if (GetKeyState("LButton", "P")) {
         try {
@@ -222,29 +260,67 @@ SwitchTo(targetIndex) {
                 MoveWindowToDesktopNum(activeHwnd, targetIndex)
         }
     }
-    
     GoToDesktopNum(targetIndex)
-    UpdateUI(targetIndex) 
+    gCurrentDesktop := targetIndex
+    UpdateUI(targetIndex)
 }
 
 SwitchNext() {
-    current := GetCurrentDesktopNum()
-    total := GetDesktopCount()
-    nextIdx := current + 1
-    if (nextIdx > total)
+    nextIdx := gCurrentDesktop + 1
+    if (nextIdx > GetDesktopCount())
         return 
     SwitchTo(nextIdx)
 }
 
 SwitchPrev() {
-    current := GetCurrentDesktopNum()
-    prevIdx := current - 1
+    prevIdx := gCurrentDesktop - 1
     if (prevIdx < 1)
         return 
     SwitchTo(prevIdx)
 }
 
-; --- 已调整：精准放宽截断限制到 16 个字符 ---
+SwitchToPreviousDesktop() {
+    global gCurrentDesktop, gPreviousDesktop
+    if (gPreviousDesktop > 0 && gPreviousDesktop <= GetDesktopCount() && gPreviousDesktop != gCurrentDesktop) {
+        temp := gCurrentDesktop
+        GoToDesktopNum(gPreviousDesktop)
+        gCurrentDesktop := gPreviousDesktop
+        gPreviousDesktop := temp
+        UpdateUI(gCurrentDesktop)
+    }
+}
+
+; ★ 首字母循环跳转 ★
+SwitchToByLetter(letter) {
+    global gCurrentDesktop
+    total := GetDesktopCount()
+    candidates := []
+
+    loop total {
+        idx := A_Index
+        name := GetDesktopName(idx)
+        if (name != "" && SubStr(name, 1, 1) ~= "[a-zA-Z]") {
+            firstChar := StrLower(SubStr(name, 1, 1))
+            if (firstChar == StrLower(letter)) {
+                candidates.Push(idx)
+            }
+        }
+    }
+
+    if (candidates.Length == 0)
+        return
+
+    for i, idx in candidates {
+        if (idx == gCurrentDesktop) {
+            nextIndex := candidates[Mod(i, candidates.Length) + 1]
+            SwitchTo(nextIndex)
+            return
+        }
+    }
+
+    SwitchTo(candidates[1])
+}
+
 TruncateString(str, maxLength := 16) {
     if (StrLen(str) > maxLength) {
         return SubStr(str, 1, maxLength) . "..."
@@ -255,24 +331,19 @@ TruncateString(str, maxLength := 16) {
 UpdateUI(targetIdx) {
     local currentIdx := 0
     if (targetIdx = 0) {
-        currentIdx := GetCurrentDesktopNum()
+        currentIdx := gCurrentDesktop
     } else {
         currentIdx := targetIdx
     }
 
     rawName := GetDesktopName(currentIdx)
     global A_IconTip := rawName
-    
-    ; 渲染带图标的 16 字长文本
     HUDText.Value := "❖  " . TruncateString(rawName, 16)
     
     SetTimer(StartFadeOut, 0)
     SetTimer(DoFadeOut, 0)
-    
-    ; 居中显示 360 像素宽度的精致弹窗
     HUD.Show("NoActivate xCenter yCenter w360 h64")
     WinSetRegion("0-0 w360 h64 R16-16", HUD.Hwnd)
-    
     SetTimer(DoFadeIn, 15)
 }
 
@@ -307,7 +378,7 @@ DoFadeOut() {
 }
 
 ; ======================================================================
-; 6. 注册系统底层虚拟桌面切换通知事件 (保持托盘同步更新 - 完全保留原样)
+; 6. 系统底层虚拟桌面切换通知
 ; ======================================================================
 DllCall(RegisterPostMessageHookProc, "Ptr", A_ScriptHwnd, "Int", 0x1400 + 30, "Int")
 OnMessage(0x1400 + 30, OnChangeDesktop)
@@ -315,5 +386,10 @@ OnMessage(0x1400 + 30, OnChangeDesktop)
 OnChangeDesktop(wParam, lParam, msg, hwnd) {
     Critical(1)
     newDesktopIdx := lParam + 1
-    global A_IconTip := GetDesktopName(newDesktopIdx)
+    global gCurrentDesktop, gPreviousDesktop, A_IconTip
+    if (newDesktopIdx != gCurrentDesktop) {
+        gPreviousDesktop := gCurrentDesktop
+        gCurrentDesktop := newDesktopIdx
+    }
+    A_IconTip := GetDesktopName(gCurrentDesktop)
 }
