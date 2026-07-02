@@ -106,9 +106,62 @@ WinSetTransparent(0, HUD.Hwnd)
 UpdateUI(gCurrentDesktop)
 
 ; ======================================================================
-; 4. 热键绑定 (任务栏 或 屏幕上方 10%)
+; 4. 配置文件读取（是否启用顶部触发区域）
 ; ======================================================================
-#HotIf IsHoveringTriggerArea()
+global gEnableTopArea := false
+configFile := A_ScriptDir "\DesktopSwitcher.ini"
+if FileExist(configFile) {
+    try {
+        gEnableTopArea := IniRead(configFile, "Settings", "EnableTopArea", "false") = "true"
+    }
+} else {
+    ; 创建默认配置文件（默认关闭顶部触发）
+    iniContent := "[Settings]`nEnableTopArea=false"
+    FileAppend(iniContent, configFile)
+}
+
+; ======================================================================
+; 5. 触发条件判断（任务栏 或 屏幕顶部（可配置））
+; ======================================================================
+IsTriggerActive() {
+    ; 1) 检查鼠标是否在任务栏上
+    static taskbarClasses := ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"]
+    try {
+        MouseGetPos(,, &hWnd)
+        if (hWnd) {
+            class := WinGetClass("ahk_id " hWnd)
+            for cls in taskbarClasses {
+                if (class = cls)
+                    return true
+            }
+        }
+    }
+
+    ; 2) 如果配置允许，检查鼠标是否在屏幕顶部 10% 区域内
+    if (gEnableTopArea) {
+        oldCoordMode := A_CoordModeMouse
+        CoordMode("Mouse", "Screen")
+        MouseGetPos(&mouseX, &mouseY)
+        CoordMode("Mouse", oldCoordMode)
+        loop MonitorGetCount() {
+            try {
+                MonitorGet(A_Index, &Left, &Top, &Right, &Bottom)
+                if (mouseX >= Left && mouseX <= Right && mouseY >= Top && mouseY <= Bottom) {
+                    monitorHeight := Bottom - Top
+                    if (mouseY - Top <= monitorHeight * 0.10)
+                        return true
+                    break
+                }
+            }
+        }
+    }
+    return false
+}
+
+; ======================================================================
+; 6. 热键绑定（仅当触发条件满足时生效）
+; ======================================================================
+#HotIf IsTriggerActive()
 
     ; --- 基础跳转 Ctrl+1~9 ---
     ^1::SwitchTo(1)
@@ -144,7 +197,7 @@ UpdateUI(gCurrentDesktop)
     ^k::SwitchToByLetter("k")
     ^l::SwitchToByLetter("l")
     ^m::SwitchToByLetter("m")
-    ^n::SwitchToByLetter("n")   ; Ctrl+N 现在正常首字母跳转
+    ^n::SwitchToByLetter("n")
     ^o::SwitchToByLetter("o")
     ^p::SwitchToByLetter("p")
     ^q::SwitchToByLetter("q")
@@ -158,23 +211,20 @@ UpdateUI(gCurrentDesktop)
     ^y::SwitchToByLetter("y")
     ^z::SwitchToByLetter("z")
 
-    ; --- ★ 修改：创建桌面改为 Ctrl+Shift+N，并直接跳转到新桌面 ★ ---
+    ; --- ★ 创建桌面 Ctrl+Shift+N，并直接跳转到新桌面 ★ ---
     ^+n:: {
         global gCurrentDesktop, gPreviousDesktop
         totalBefore := GetDesktopCount()
         CreateDesktop()
 
-        ; 等待新桌面出现（数量增加）
+        ; 等待新桌面出现
         loop 50 {
             if (GetDesktopCount() > totalBefore)
                 break
             Sleep(10)
         }
 
-        ; 新桌面一定是最后一个索引
         newIdx := GetDesktopCount()
-
-        ; 如果确实创建成功且数量变化了
         if (newIdx > totalBefore) {
             gPreviousDesktop := gCurrentDesktop
             gCurrentDesktop := newIdx
@@ -183,19 +233,24 @@ UpdateUI(gCurrentDesktop)
         }
     }
 
-    ; --- 删除当前桌面 Ctrl+Delete ---
+    ; --- 删除当前桌面 Ctrl+Delete（带确认提示） ---
     ^Delete:: {
         total := GetDesktopCount()
-        if (total > 1) { 
-            oldIdx := gCurrentDesktop
-            fallbackIdx := (oldIdx == 1) ? 1 : (oldIdx - 1)
-            RemoveDesktop(oldIdx, fallbackIdx) 
-            loop 50 {
-                if (GetCurrentDesktopNum() != oldIdx)
-                    break
-                Sleep(10)
+        if (total > 1) {
+            currentName := GetDesktopName(gCurrentDesktop)
+            if MsgBox("确定要删除当前虚拟桌面（" currentName "）吗？`n此操作不可撤销！", "删除确认", 4) = "Yes" {
+                oldIdx := gCurrentDesktop
+                fallbackIdx := (oldIdx == 1) ? 1 : (oldIdx - 1)
+                RemoveDesktop(oldIdx, fallbackIdx)
+                loop 50 {
+                    if (GetCurrentDesktopNum() != oldIdx)
+                        break
+                    Sleep(10)
+                }
+                UpdateUI(GetCurrentDesktopNum())
             }
-            UpdateUI(GetCurrentDesktopNum())
+        } else {
+            MsgBox("至少保留一个虚拟桌面，无法删除最后一个。", "提示", 64)
         }
     }
 
@@ -213,36 +268,8 @@ UpdateUI(gCurrentDesktop)
 #HotIf
 
 ; ======================================================================
-; 5. 核心业务与 UI 渲染函数
+; 7. 核心业务与 UI 渲染函数
 ; ======================================================================
-
-IsHoveringTriggerArea() {
-    try {
-        MouseGetPos(,, &hWnd)
-        if (hWnd) {
-            class := WinGetClass("ahk_id " hWnd)
-            if (class = "Shell_TrayWnd" || class = "Shell_SecondaryTrayWnd")
-                return true
-        }
-    }
-    oldCoordMode := A_CoordModeMouse
-    CoordMode("Mouse", "Screen") 
-    MouseGetPos(&mouseX, &mouseY)
-    CoordMode("Mouse", oldCoordMode) 
-    loop MonitorGetCount() {
-        try {
-            MonitorGet(A_Index, &Left, &Top, &Right, &Bottom)
-            if (mouseX >= Left && mouseX <= Right && mouseY >= Top && mouseY <= Bottom) {
-                monitorHeight := Bottom - Top      
-                relativeY := mouseY - Top          
-                if (relativeY <= monitorHeight * 0.10)
-                    return true
-                break 
-            }
-        }
-    }
-    return false
-}
 
 SwitchTo(targetIndex) {
     global gCurrentDesktop, gPreviousDesktop
@@ -290,7 +317,6 @@ SwitchToPreviousDesktop() {
     }
 }
 
-; ★ 首字母循环跳转 ★
 SwitchToByLetter(letter) {
     global gCurrentDesktop
     total := GetDesktopCount()
@@ -378,7 +404,7 @@ DoFadeOut() {
 }
 
 ; ======================================================================
-; 6. 系统底层虚拟桌面切换通知
+; 8. 系统底层虚拟桌面切换通知
 ; ======================================================================
 DllCall(RegisterPostMessageHookProc, "Ptr", A_ScriptHwnd, "Int", 0x1400 + 30, "Int")
 OnMessage(0x1400 + 30, OnChangeDesktop)
